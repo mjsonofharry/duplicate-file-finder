@@ -29,7 +29,7 @@ object DuplicateFileFinder {
         try {
           while (digest.read(buffer) != -1) {}
         } finally {
-          digest.close()
+          digest.close
         }
         input.close
         Some(md5.digest.map("%02x".format(_)).mkString)
