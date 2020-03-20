@@ -1,41 +1,32 @@
 package com.mjsonofharry.fsutils
 
+import atto._, Atto._
 import java.io.File
-import java.io.FileInputStream
-import java.security.DigestInputStream
-import java.security.MessageDigest
 import org.apache.spark.SparkConf
+import org.apache.spark.sql.Encoders
 import org.apache.spark.sql.Dataset
 import org.apache.spark.sql.KeyValueGroupedDataset
 import org.apache.spark.sql.SparkSession
-import scala.util.Failure
-import scala.util.Success
-import scala.util.Try
+import org.apache.spark.storage.StorageLevel
 
 object DuplicateFileFinder {
 
-  case class FileInfo(path: String, size: Long, hash: Option[String])
+  case class FileInfo(path: String, size: Long, hash: String)
+
+  object FileInfo {
+    val delim = string("/\\/")
+    val parser = for {
+      path <- manyUntil(anyChar, delim) map (_.mkString)
+      size <- long <~ delim
+      hash <- manyUntil(anyChar, endOfInput) map (_.mkString)
+    } yield FileInfo(path, size, hash)
+
+    def apply(s: String): FileInfo = parser.parseOnly(s).option.get
+  }
 
   case class GroupKey(hash: String, size: Long)
 
   case class GroupValue(paths: Set[String], count: Long)
-
-  def getFileHash(f: File): Option[String] =
-    Try(new FileInputStream(f)) match {
-      case Success(input) => {
-        val md5 = MessageDigest.getInstance("MD5")
-        val digest = new DigestInputStream(input, md5)
-        val buffer = new Array[Byte](8192)
-        try {
-          while (digest.read(buffer) != -1) {}
-        } finally {
-          digest.close
-        }
-        input.close
-        Some(md5.digest.map("%02x".format(_)).mkString)
-      }
-      case Failure(exception) => None
-    }
 
   val DEFAULT_OUTPUT = "output"
 
@@ -63,49 +54,34 @@ object DuplicateFileFinder {
       )
 
     val spark = SparkSession.builder
-      .appName("File Search")
+      .appName("Duplicate File Finder")
       .master("local")
       .config(kryoConf)
       .getOrCreate
     import spark.implicits._
 
     try {
-      val input: Dataset[String] = spark.read
-        .textFile(inputFilename)
+      val input: Dataset[FileInfo] =
+        spark.read
+          .textFile(inputFilename)
+          .persist(StorageLevel.MEMORY_AND_DISK_SER)
+          .map(FileInfo(_))
 
-      val data: Dataset[FileInfo] = input
-        .map(path => {
-          print(path + "\t")
-          val f = new File(path)
-          val hash = getFileHash(f)
-          println(hash.map(_.toString).getOrElse("No hash"))
-          FileInfo(path = path, size = f.length, hash = hash)
-        })
-
-      val groups: KeyValueGroupedDataset[GroupKey, GroupValue] = data
-        .flatMap(
-          part =>
-            for {
-              hash <- part.hash
-            } yield GroupKey(hash, part.size) -> GroupValue(Set(part.path), 1)
-        )
+      val groups: KeyValueGroupedDataset[GroupKey, GroupValue] = input
+        .map(f => GroupKey(f.hash, f.size) -> GroupValue(Set(f.path), 1))
         .groupByKey(_._1)
         .mapValues(_._2)
 
       val aggregated: Dataset[(GroupKey, GroupValue)] = groups
         .reduceGroups(
-          (left, right) =>
-            GroupValue(
-              left.paths ++ right.paths,
-              left.count + right.count
-            )
+          (a, b) => GroupValue(a.paths ++ b.paths, a.count + b.count)
         )
         .filter(_._2.count > 1)
 
       val output: Dataset[String] = aggregated
-        .map(group => group._2.paths.mkString(","))
+        .map(group => group._2.paths.mkString("/\\/"))
 
-      output.write.text(outputFilename)
+      output.coalesce(1).write.text(outputFilename)
     } finally {
       spark.close
     }
