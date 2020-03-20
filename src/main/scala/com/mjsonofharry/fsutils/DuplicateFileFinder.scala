@@ -14,7 +14,7 @@ object DuplicateFileFinder {
   case class FileInfo(path: String, size: Long, hash: String)
 
   object FileInfo {
-    val delim = string("/\\/")
+    val delim = string(FileTreeIndexer.DELIM)
     val parser = for {
       path <- manyUntil(anyChar, delim) map (_.mkString)
       size <- long <~ delim
@@ -79,7 +79,7 @@ object DuplicateFileFinder {
         .filter(_._2.count > 1)
 
       val output: Dataset[String] = aggregated
-        .map(group => group._2.paths.mkString("/\\/"))
+        .map(group => group._2.paths.mkString(FileTreeIndexer.DELIM))
 
       output.coalesce(1).write.text(outputFilename)
     } finally {

@@ -25,6 +25,7 @@ object FileTreeIndexer {
   }
 
   val DEFAULT_INDEX = "index.txt"
+  val DELIM = "/\\/"
 
   def traverse(acc: Stream[Leaf])(f: File): Stream[Leaf] = Tree(f) match {
     case leaf: Leaf     => acc :+ leaf
@@ -74,7 +75,6 @@ object FileTreeIndexer {
     val outputFile = new File(outputFilename)
     if (outputFile.exists) outputFile.delete
     val writer = new BufferedWriter(new FileWriter(outputFile, true))
-    val delim  = "/\\/"
     roots
       .flatMap(traverse)
       .toIterator
@@ -82,7 +82,7 @@ object FileTreeIndexer {
         val f = new File(file.path)
         val hash = getFileHashUnsafe(f)
         println(file.path)
-        writer.write(s"${file.path}${delim}${f.length}${delim}${hash}\n")
+        writer.write(s"${file.path}${DELIM}${f.length}${DELIM}${hash}\n")
       })
     writer.close
   }
